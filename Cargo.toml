@@ -1,0 +1,7 @@
+[package]
+name = "wbuilder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustup-configurator = "0.1.0"
