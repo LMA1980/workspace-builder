@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+regex = { version = "1.12.3", features = ["perf-dfa-full"] }
 rustup-configurator = "0.1.0"
