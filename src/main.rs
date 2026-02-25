@@ -43,9 +43,9 @@ fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
         .env("EMSDK", &env_emsdk)
         .env("EMSDK_NODE", &env_emsdk_node);
     if !is_release {
-        *cmd = cmd.args(["build", "--target", target]);
+        *cmd = cmd.args(["build", "--all-targets", "--target", target]);
     } else {
-        *cmd = cmd.args(["build", "--target", target, "--release"]);
+        *cmd = cmd.args(["build", "--all-targets", "--target", target, "--release"]);
     }
     cmd.status().expect("Failed to run cargo build").to_owned()
 }
@@ -54,9 +54,9 @@ fn execute_build_with_xwin(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["xwin", "build", "--target", target]);
+        cmd.args(["xwin", "build", "--all-targets", "--target", target]);
     } else  {
-        cmd.args(["xwin", "build", "--target", target, "--release"]);
+        cmd.args(["xwin", "build", "--all-targets", "--target", target, "--release"]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
@@ -65,9 +65,9 @@ fn execute_build_default(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["build", "--target", target]);
+        cmd.args(["build", "--all-targets", "--target", target]);
     } else  {
-        cmd.args(["build", "--target", target, "--release"]);
+        cmd.args(["build", "--all-targets", "--target", target, "--release"]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
