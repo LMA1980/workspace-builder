@@ -32,7 +32,7 @@ fn with_emsdk() -> (String, String, String) {
     let with_env_emsdk_node = env::var("EMSDK_NODE").unwrap_or(format!("{with_env_emsdk}/node/22.16.0_64bit/bin/node")).to_owned();
     #[cfg(debug_assertions)]
     dbg!(&with_env_emsdk_node);
-    ( with_env_emsdk.to_owned(), with_env_emsdk_path.to_owned(), with_env_emsdk_node.to_owned() )  
+    (with_env_emsdk.to_owned(), with_env_emsdk_path.to_owned(), with_env_emsdk_node.to_owned())
 }
 
 fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
