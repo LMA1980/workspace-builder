@@ -163,5 +163,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build(installed_targets, false);
     test(installed_targets);
     build(installed_targets, true);
+    let _ = Command::new("cargo")
+        .args(["bench","--benches"])
+        .status()
+        .expect("Issue executing the benchmarks...");
     Ok(())
 }
