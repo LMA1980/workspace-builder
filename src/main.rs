@@ -1,6 +1,11 @@
 use regex::Regex;
 use rustup_configurator::target::{self, Target};
-use std::{env::{self, set_current_dir},path::PathBuf,process::{Command, ExitStatus}};
+use std::{env::{self, set_current_dir},path::PathBuf,process::{Command, ExitStatus}, sync::LazyLock};
+
+
+static R_WASM: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r"wasm.*").unwrap());
+static R_WINDOWS: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r".*windows.*").unwrap());
+static R_LINUX_MUSL: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r".*linux-musl").unwrap());
 
 fn set_workspace(location: PathBuf) {
     let cd_status = set_current_dir(location);
@@ -8,7 +13,6 @@ fn set_workspace(location: PathBuf) {
         std::process::exit(3);
     }
 }
-
 fn execute_clippy() {
     let clippy_status = Command::new("cargo")
         .args(["clippy","--","-D","warnings"])
@@ -18,7 +22,6 @@ fn execute_clippy() {
         std::process::exit(2);
     }
 }
-
 fn with_emsdk() -> (String, String, String) {
     let try_read_env_emsdk = env::var("EMSDK").unwrap_or("/opt/emsdk".to_string()).to_owned();
     let with_env_emsdk = try_read_env_emsdk.as_str();
@@ -34,7 +37,6 @@ fn with_emsdk() -> (String, String, String) {
     dbg!(&with_env_emsdk_node);
     (with_env_emsdk.to_owned(), with_env_emsdk_path.to_owned(), with_env_emsdk_node.to_owned())
 }
-
 fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
     let (env_emsdk, env_emsdk_path, env_emsdk_node) = with_emsdk();
     let mut bind_cmd = Command::new("cargo");
@@ -43,31 +45,39 @@ fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
         .env("EMSDK", &env_emsdk)
         .env("EMSDK_NODE", &env_emsdk_node);
     if !is_release {
-        *cmd = cmd.args(["build", "--all-targets", "--target", target]);
+        *cmd = cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
     } else {
-        *cmd = cmd.args(["build", "--all-targets", "--target", target, "--release"]);
+        *cmd = cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
     }
     cmd.status().expect("Failed to run cargo build").to_owned()
 }
-
 fn execute_build_with_xwin(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["xwin", "build", "--all-targets", "--target", target]);
+        cmd.args(["xwin", "build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
     } else  {
-        cmd.args(["xwin", "build", "--all-targets", "--target", target, "--release"]);
+        cmd.args(["xwin", "build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
-
+fn execute_build_with_cross(target: &str, is_release: bool) -> ExitStatus {
+    let mut bind_cmd = Command::new("cargo");
+    let cmd: &mut Command = &mut bind_cmd;
+    if !is_release {
+        cmd.args(["cross", "build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
+    } else  {
+        cmd.args(["cross", "build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
+    }
+    cmd.status().expect("Failed to cross-build against msvc")
+}
 fn execute_build_default(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["build", "--all-targets", "--target", target]);
+        cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
     } else  {
-        cmd.args(["build", "--all-targets", "--target", target, "--release"]);
+        cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
@@ -80,13 +90,15 @@ fn build(targets: &[Target], is_release: bool) {
         } else {
             println!("-=====================- {} [release build] -=====================-", &target.triple);
         }
-
         status = match target.triple.as_str() {
-            "wasm32-unknown-emscripten" => {
+            val if R_WASM.is_match(val) => {
                 execute_build_with_emsdk(target.triple.as_str(), is_release)
             }
-            "x86_64-pc-windows-msvc" => {
+            val if R_WINDOWS.is_match(val) => {
                 execute_build_with_xwin(target.triple.as_str(), is_release)
+            }
+            val if R_LINUX_MUSL.is_match(val) => {
+                execute_build_with_cross(target.triple.as_str(), is_release)
             }
             _ => {
                 execute_build_default(target.triple.as_str(), is_release)
@@ -97,13 +109,11 @@ fn build(targets: &[Target], is_release: bool) {
         }
     }
 }
-
 fn execute_test_for_wasm() -> ExitStatus {
     Command::new("cargo-cross-test")
         .status()
         .expect("Failed to cross-build against msvc")
 }
-
 // this does not work
 /*
 fn execute_test_with_xwin(target: &str) -> ExitStatus {
@@ -113,29 +123,32 @@ fn execute_test_with_xwin(target: &str) -> ExitStatus {
         .expect("Failed to cross-build against msvc")
 }
 */
-
 fn execute_test_default(target: &str) -> ExitStatus {
     Command::new("cargo")
         .args(["test", "--tests", "--target", target])
         .status()
         .expect("Failed to cross-build against msvc")
 }
-
 fn test(targets: &[Target]) {
     let mut status;
-    let r_wasm = Regex::new(r"wasm.*").unwrap();
-    let r_windows = Regex::new(r".*windows.*").unwrap();
     for target in targets.iter() {
         println!("-=====================- {} [test] -=====================-", &target.triple);
         status = match &target.triple {
-            val if r_wasm.is_match(val) => {
+            val if R_WASM.is_match(val) => {
                 // this tool only work in a package directory
                 set_workspace("./test-cross-compile".into());
                 let t_status = execute_test_for_wasm();
                 set_workspace("..".into());
                 t_status
             }
-            val if r_windows.is_match(val) => {
+            val if R_WINDOWS.is_match(val) => {
+                Command::new("echo")
+                    .args(["need to figure out how to run unittests for Windows binaries..."])
+                    .status()
+                    .expect("echo is missing!!")
+                // execute_test_with_xwin(target.triple.as_str())
+            }
+            val if R_LINUX_MUSL.is_match(val) => {
                 Command::new("echo")
                     .args(["need to figure out how to run unittests for Windows binaries..."])
                     .status()
