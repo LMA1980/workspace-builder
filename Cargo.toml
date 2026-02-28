@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 cargo = { version = "0.94.0", features = ["openssl", "vendored-libgit2", "vendored-openssl"] }
-regex = { version = "1.12.3", features = ["perf-dfa-full"] }
-rustup-configurator = "0.1.0"
+regex = { version = "1.12.3" }
+rustup-configurator = { version = "0.1.2" }

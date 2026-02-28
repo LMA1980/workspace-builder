@@ -1,11 +1,19 @@
 use regex::Regex;
 use rustup_configurator::target::{self, Target};
-use std::{env::{self, set_current_dir},path::PathBuf,process::{Command, ExitStatus}, sync::LazyLock};
-
+use std::{
+    env::{self, set_current_dir},
+    path::PathBuf,
+    process::{Command, ExitStatus},
+    sync::LazyLock,
+};
 
 static R_WASM: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r"wasm.*").unwrap());
-static R_WINDOWS: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r".*windows.*").unwrap());
-static R_LINUX_MUSL: LazyLock<regex::Regex> = std::sync::LazyLock::new(|| Regex::new(r".*linux-musl").unwrap());
+static R_WASI: LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"wasm.*wasi.*").unwrap());
+static R_WINDOWS: LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r".*windows.*").unwrap());
+static R_LINUX_MUSL: LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r".*linux-musl").unwrap());
 
 fn set_workspace(location: PathBuf) {
     let cd_status = set_current_dir(location);
@@ -15,27 +23,83 @@ fn set_workspace(location: PathBuf) {
 }
 fn execute_clippy() {
     let clippy_status = Command::new("cargo")
-        .args(["clippy","--","-D","warnings"])
+        .args(["clippy", "--", "-D", "warnings"])
         .status()
         .expect("cargo-clippy failed?");
     if !clippy_status.success() {
         std::process::exit(2);
     }
 }
+fn with_wasisdk() -> (String, String) {
+    let try_read_env_wasisdk = env::var("WASI_SDK_PATH")
+        .unwrap_or("/opt/wasi-sdk".to_string())
+        .to_owned();
+    #[cfg(debug_assertions)]
+    dbg!(&try_read_env_wasisdk);
+    let with_env_wasisdk = try_read_env_wasisdk.as_str();
+    let with_env_wasisdk_path = format!(
+        "/home/lma1980/.wasmtime/bin:/home/lma1980/.cargo/bin:/usr/lib64/ccache:/home/lma1980/.local/bin:/home/lma1980/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:${with_env_wasisdk}:${with_env_wasisdk}/bin"
+    );
+    #[cfg(debug_assertions)]
+    dbg!(&with_env_wasisdk_path);
+    (
+        with_env_wasisdk.to_owned(),
+        with_env_wasisdk_path.to_owned(),
+    )
+}
+fn execute_build_with_wasisdk(target: &str, is_release: bool) -> ExitStatus {
+    let (env_wasisdk, env_wasisdk_path) = with_wasisdk();
+    let mut bind_cmd = Command::new("cargo");
+    let cmd = &mut bind_cmd
+        .env("PATH", &env_wasisdk_path)
+        .env("WASI_SDK_PATH", &env_wasisdk);
+    if !is_release {
+        *cmd = cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--exclude",
+            "wbuilder",
+        ]);
+    } else {
+        *cmd = cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--release",
+            "--exclude",
+            "wbuilder",
+        ]);
+    }
+    cmd.status().expect("Failed to run cargo build").to_owned()
+}
 fn with_emsdk() -> (String, String, String) {
-    let try_read_env_emsdk = env::var("EMSDK").unwrap_or("/opt/emsdk".to_string()).to_owned();
+    let try_read_env_emsdk = env::var("EMSDK")
+        .unwrap_or("/opt/emsdk".to_string())
+        .to_owned();
+    let (_, with_env_wasisdk) = with_wasisdk();
     let with_env_emsdk = try_read_env_emsdk.as_str();
     #[cfg(debug_assertions)]
     dbg!(&with_env_emsdk);
     let with_env_emsdk_path = format!(
-        "{with_env_emsdk}:{with_env_emsdk}/upstream/emscripten:{with_env_emsdk}/node/22.16.0_64bit/bin:/home/lma1980/.wasmtime/bin:/home/lma1980/.cargo/bin:/usr/lib64/ccache:/home/lma1980/.local/bin:/home/lma1980/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/wasi-sdk"
+        "{with_env_emsdk}:{with_env_emsdk}/upstream/emscripten:{with_env_emsdk}/node/22.16.0_64bit/bin:{with_env_wasisdk}"
     );
     #[cfg(debug_assertions)]
     dbg!(&with_env_emsdk_path);
-    let with_env_emsdk_node = env::var("EMSDK_NODE").unwrap_or(format!("{with_env_emsdk}/node/22.16.0_64bit/bin/node")).to_owned();
+    let with_env_emsdk_node = env::var("EMSDK_NODE")
+        .unwrap_or(format!("{with_env_emsdk}/node/22.16.0_64bit/bin/node"))
+        .to_owned();
     #[cfg(debug_assertions)]
     dbg!(&with_env_emsdk_node);
-    (with_env_emsdk.to_owned(), with_env_emsdk_path.to_owned(), with_env_emsdk_node.to_owned())
+    (
+        with_env_emsdk.to_owned(),
+        with_env_emsdk_path.to_owned(),
+        with_env_emsdk_node.to_owned(),
+    )
 }
 fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
     let (env_emsdk, env_emsdk_path, env_emsdk_node) = with_emsdk();
@@ -45,9 +109,26 @@ fn execute_build_with_emsdk(target: &str, is_release: bool) -> ExitStatus {
         .env("EMSDK", &env_emsdk)
         .env("EMSDK_NODE", &env_emsdk_node);
     if !is_release {
-        *cmd = cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
+        *cmd = cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--exclude",
+            "wbuilder",
+        ]);
     } else {
-        *cmd = cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
+        *cmd = cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--release",
+            "--exclude",
+            "wbuilder",
+        ]);
     }
     cmd.status().expect("Failed to run cargo build").to_owned()
 }
@@ -55,9 +136,28 @@ fn execute_build_with_xwin(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["xwin", "build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
-    } else  {
-        cmd.args(["xwin", "build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
+        cmd.args([
+            "xwin",
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--exclude",
+            "wbuilder",
+        ]);
+    } else {
+        cmd.args([
+            "xwin",
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--release",
+            "--exclude",
+            "wbuilder",
+        ]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
@@ -65,9 +165,28 @@ fn execute_build_with_cross(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["cross", "build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
-    } else  {
-        cmd.args(["cross", "build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
+        cmd.args([
+            "cross",
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--exclude",
+            "wbuilder",
+        ]);
+    } else {
+        cmd.args([
+            "cross",
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--release",
+            "--exclude",
+            "wbuilder",
+        ]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
@@ -75,9 +194,26 @@ fn execute_build_default(target: &str, is_release: bool) -> ExitStatus {
     let mut bind_cmd = Command::new("cargo");
     let cmd: &mut Command = &mut bind_cmd;
     if !is_release {
-        cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--exclude","wbuilder"]);
-    } else  {
-        cmd.args(["build", "--workspace", "--all-targets", "--target", target, "--release", "--exclude","wbuilder"]);
+        cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--exclude",
+            "wbuilder",
+        ]);
+    } else {
+        cmd.args([
+            "build",
+            "--workspace",
+            "--all-targets",
+            "--target",
+            target,
+            "--release",
+            "--exclude",
+            "wbuilder",
+        ]);
     }
     cmd.status().expect("Failed to cross-build against msvc")
 }
@@ -86,13 +222,22 @@ fn build(targets: &[Target], is_release: bool) {
     let mut status;
     for target in targets.iter() {
         if !is_release {
-            println!("-=====================- {} [debug build] -=====================-", &target.triple);
+            println!(
+                "-=====================- {} [debug build] -=====================-",
+                &target.triple
+            );
         } else {
-            println!("-=====================- {} [release build] -=====================-", &target.triple);
+            println!(
+                "-=====================- {} [release build] -=====================-",
+                &target.triple
+            );
         }
         status = match target.triple.as_str() {
             val if R_WASM.is_match(val) => {
                 execute_build_with_emsdk(target.triple.as_str(), is_release)
+            }
+            val if R_WASI.is_match(val) => {
+                execute_build_with_wasisdk(target.triple.as_str(), is_release)
             }
             val if R_WINDOWS.is_match(val) => {
                 execute_build_with_xwin(target.triple.as_str(), is_release)
@@ -100,9 +245,7 @@ fn build(targets: &[Target], is_release: bool) {
             val if R_LINUX_MUSL.is_match(val) => {
                 execute_build_with_cross(target.triple.as_str(), is_release)
             }
-            _ => {
-                execute_build_default(target.triple.as_str(), is_release)
-            }
+            _ => execute_build_default(target.triple.as_str(), is_release),
         };
         if !status.success() {
             std::process::exit(1);
@@ -132,7 +275,10 @@ fn execute_test_default(target: &str) -> ExitStatus {
 fn test(targets: &[Target]) {
     let mut status;
     for target in targets.iter() {
-        println!("-=====================- {} [test] -=====================-", &target.triple);
+        println!(
+            "-=====================- {} [test] -=====================-",
+            &target.triple
+        );
         status = match &target.triple {
             val if R_WASM.is_match(val) => {
                 // this tool only work in a package directory
@@ -155,9 +301,7 @@ fn test(targets: &[Target]) {
                     .expect("echo is missing!!")
                 // execute_test_with_xwin(target.triple.as_str())
             }
-            _ => {
-                execute_test_default(target.triple.as_str())
-            }
+            _ => execute_test_default(target.triple.as_str()),
         };
         if !status.success() {
             std::process::exit(1);
@@ -166,18 +310,18 @@ fn test(targets: &[Target]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Change directory to current user workspace folder. Currently hard-coded... 
+    // Change directory to current user workspace folder. Currently hard-coded...
     let home = env::var("HOME").unwrap_or(".".to_string()).to_owned();
     set_workspace(format!("{home}/workspace").into());
     execute_clippy();
     // Get all installed targets
-    let installed_targets: &Vec<Target> = &target::installed()
-        .expect("Failed to list installed targets");
+    let installed_targets: &Vec<Target> =
+        &target::installed().expect("Failed to list installed targets");
     build(installed_targets, false);
     test(installed_targets);
     build(installed_targets, true);
     let _ = Command::new("cargo")
-        .args(["bench","--benches"])
+        .args(["bench", "--benches"])
         .status()
         .expect("Issue executing the benchmarks...");
     Ok(())
